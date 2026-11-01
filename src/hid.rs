@@ -604,3 +604,11 @@ fn per_key_fill(
         Err(format!("per-key commit returned {commit}"))
     }
 }
+
+/// Upload one encoded payload without the worker (used by `--headless`).
+pub fn push_payload(payload: &[u8]) -> Result<usize, String> {
+    let api = HidApi::new().map_err(|e| format!("hidapi init failed: {e}"))?;
+    let device = locate(&api)?;
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    upload(&device, payload, &tx, true)
+}

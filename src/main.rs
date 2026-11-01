@@ -4,9 +4,12 @@ mod font;
 mod hid;
 mod live;
 mod model;
+mod service;
 mod theme;
 
 use std::time::{Duration, Instant};
+
+use chrono::Timelike;
 
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, Pos2, Rect, Sense,
@@ -92,6 +95,8 @@ struct App {
     metrics_at: Option<Instant>,
     log: Vec<(String, String, Tone)>,
     push_failures: u32,
+    service_active: bool,
+    service_checked: Option<Instant>,
 }
 
 impl App {
@@ -137,6 +142,8 @@ impl App {
             metrics_at: None,
             log: Vec::new(),
             push_failures: 0,
+            service_active: false,
+            service_checked: None,
         };
         app.worker.send(Command::Probe);
         app.live_preview = app.live_state.render(app.live_provider);
@@ -374,7 +381,7 @@ impl App {
                         Tone::Good => GOOD,
                         Tone::Bad => BAD,
                     };
-                    ui.label(egui::RichText::new("●").size(9.0).color(colour));
+                    status_dot(ui, colour);
                     ui.add_space(2.0);
                     ui.label(egui::RichText::new(&self.status).size(12.0).color(colour));
 
@@ -412,7 +419,7 @@ impl App {
                             ),
                             None => (WARN, "live · waiting for first push".to_string()),
                         };
-                        ui.label(egui::RichText::new("●").size(8.0).color(colour));
+                        status_dot(ui, colour);
                         ui.label(egui::RichText::new(text).size(11.0).color(colour));
                     }
 
@@ -1091,6 +1098,68 @@ impl App {
                     .corner_radius(CornerRadius::same(9))
                     .inner_margin(Margin::same(14))
                     .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width() - 8.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("BACKGROUND").size(10.0).color(TEXT_FAINT));
+                            ui.add_space(6.0);
+                            let (colour, label) = if self.service_active {
+                                (GOOD, "running")
+                            } else {
+                                (TEXT_FAINT, "off")
+                            };
+                            status_dot(ui, colour);
+                            ui.label(egui::RichText::new(label).size(10.0).color(colour));
+                        });
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "Install a systemd user service so the keyboard keeps updating \
+                                 even when this window is closed.",
+                            )
+                            .size(11.0)
+                            .color(TEXT_DIM),
+                        );
+                        ui.add_space(8.0);
+                        if self.service_active {
+                            if ui.button("Stop background service").clicked() {
+                                match service::uninstall() {
+                                    Ok(()) => {
+                                        self.service_active = false;
+                                        self.set_status("background service stopped", Tone::Info);
+                                    }
+                                    Err(message) => self.set_status(message, Tone::Bad),
+                                }
+                            }
+                        } else if ui.button("Run in the background").clicked() {
+                            match service::install(self.live_provider, self.live_interval as u64) {
+                                Ok(()) => {
+                                    self.service_active = true;
+                                    self.set_status("background service installed", Tone::Good);
+                                }
+                                Err(message) => self.set_status(message, Tone::Bad),
+                            }
+                        }
+                        if self.service_active {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "serving {} every {} s, independent of this window",
+                                    self.live_provider.label(),
+                                    self.live_interval
+                                ))
+                                .size(10.0)
+                                .color(TEXT_FAINT),
+                            );
+                        }
+                    });
+
+                ui.add_space(12.0);
+                Frame::new()
+                    .fill(CARD)
+                    .stroke(Stroke::new(1.0_f32, BORDER))
+                    .corner_radius(CornerRadius::same(9))
+                    .inner_margin(Margin::same(14))
+                    .show(ui, |ui| {
                         ui.label(egui::RichText::new("READOUT").size(10.0).color(TEXT_FAINT));
                         ui.add_space(8.0);
                         match self.metrics {
@@ -1521,6 +1590,13 @@ impl eframe::App for App {
         self.refresh_textures(ctx);
         self.shortcuts(ctx);
 
+        if self
+            .service_checked
+            .is_none_or(|at| at.elapsed() > Duration::from_secs(3))
+        {
+            self.service_active = service::is_active();
+            self.service_checked = Some(Instant::now());
+        }
         if self.view == View::Live
             && self.metrics_at.is_none_or(|at| at.elapsed() > Duration::from_secs(1))
         {
@@ -1687,6 +1763,11 @@ fn slider_row(ui: &mut egui::Ui, label: &str, value: &mut u8, max: u8) {
     ui.spacing_mut().slider_width = previous;
 }
 
+fn status_dot(ui: &mut egui::Ui, colour: Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(8.0, 8.0), Sense::hover());
+    ui.painter().circle_filled(rect.center(), 3.0, colour);
+}
+
 fn metric_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.label(egui::RichText::new(label).size(12.0).color(TEXT_DIM));
     ui.label(
@@ -1801,8 +1882,104 @@ fn accent_mark(painter: &egui::Painter, rect: Rect) {
     painter.rect_filled(inner, CornerRadius::same(3), Color32::BLACK);
 }
 
+/// `--headless`: push frames forever, no window. This is what the systemd unit runs.
+fn run_headless(provider: Provider, interval_secs: u64) -> ! {
+    let mut state = live::LiveState::new();
+    let interval = Duration::from_secs(interval_secs.max(10));
+    loop {
+        let frame = state.render(provider);
+        let payload = Screen::single(frame).encode();
+        match hid::push_payload(&payload) {
+            Ok(pages) => eprintln!(
+                "[{}] pushed {pages} pages for {}",
+                chrono::Local::now().format("%H:%M:%S"),
+                provider.label()
+            ),
+            Err(message) => eprintln!(
+                "[{}] push failed: {message}",
+                chrono::Local::now().format("%H:%M:%S")
+            ),
+        }
+        let wait = if provider == Provider::Clock {
+            let now = chrono::Local::now();
+            let secs: f64 = now.second() as f64 + now.timestamp_subsec_millis() as f64 / 1000.0;
+            Duration::from_secs_f64((62.0_f64 - secs).max(1.5_f64))
+        } else {
+            interval
+        };
+        std::thread::sleep(wait);
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+
+    let provider_arg = |args: &[String]| -> Provider {
+        args.iter()
+            .position(|arg| arg == "--provider")
+            .and_then(|index| args.get(index + 1))
+            .map(|name| match name.as_str() {
+                "sys" | "system" => Provider::System,
+                "claude" => Provider::Claude,
+                _ => Provider::Clock,
+            })
+            .unwrap_or(Provider::Clock)
+    };
+    let interval_arg = |args: &[String]| -> u64 {
+        args.iter()
+            .position(|arg| arg == "--interval")
+            .and_then(|index| args.get(index + 1))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(60)
+    };
+
+    if args.iter().any(|arg| arg == "--install-service") {
+        let provider = provider_arg(&args);
+        let interval = interval_arg(&args);
+        match service::install(provider, interval) {
+            Ok(()) => println!(
+                "installed {}.service -> {} every {interval}s\nwatch it: journalctl --user -u {}.service -f",
+                service::UNIT,
+                provider.label(),
+                service::UNIT
+            ),
+            Err(message) => {
+                eprintln!("install failed: {message}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+    if args.iter().any(|arg| arg == "--uninstall-service") {
+        match service::uninstall() {
+            Ok(()) => println!("stopped and removed {}.service", service::UNIT),
+            Err(message) => {
+                eprintln!("uninstall failed: {message}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    if args.iter().any(|arg| arg == "--headless") {
+        let provider = args
+            .iter()
+            .position(|arg| arg == "--provider")
+            .and_then(|index| args.get(index + 1))
+            .map(|name| match name.as_str() {
+                "sys" | "system" => Provider::System,
+                "claude" => Provider::Claude,
+                _ => Provider::Clock,
+            })
+            .unwrap_or(Provider::Clock);
+        let interval = args
+            .iter()
+            .position(|arg| arg == "--interval")
+            .and_then(|index| args.get(index + 1))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(60);
+        run_headless(provider, interval);
+    }
     let initial_view = args
         .iter()
         .position(|arg| arg == "--view")

@@ -83,6 +83,13 @@ was found. Click the chip to rescan.
 3. **Live** — choose a provider, set the interval (30 s or more), press
    **Start**. **Push once** sends a single frame.
 
+   **The window is not required.** In the Live view, *BACKGROUND → Run in the
+   background* installs a `systemd --user` unit (`hiska-keg450-live.service`)
+   that runs this same binary in `--headless` mode, so the keyboard keeps
+   updating after you close the app and after a reboot. The same unit can be
+   installed from the CLI (`live.py --install-service`); whichever tool installs
+   it last owns it, so there is never more than one pusher.
+
    The clock provider ignores the interval for scheduling and aligns itself to
    the **next minute boundary** (+1.2 s), so the panel flips within about a
    second of the minute changing instead of lagging behind. A failed push
@@ -91,6 +98,13 @@ was found. Click the chip to rescan.
    stall is impossible to miss.
 
 Keyboard shortcuts: `1`–`5` switch views, `U` uploads the timeline.
+
+```bash
+# the same background service, without opening a window
+./hx450-studio --install-service --provider clock --interval 60
+./hx450-studio --headless --provider sys --interval 30   # foreground daemon
+./hx450-studio --uninstall-service
+```
 
 ## How it talks to the keyboard
 

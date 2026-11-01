@@ -36,6 +36,15 @@ impl Provider {
         }
     }
 
+    /// Name used on the command line and in the systemd unit.
+    pub fn cli_name(self) -> &'static str {
+        match self {
+            Provider::Clock => "clock",
+            Provider::System => "sys",
+            Provider::Claude => "claude",
+        }
+    }
+
     pub fn blurb(self) -> &'static str {
         match self {
             Provider::Clock => "Time, weekday and year on the panel",
