@@ -1249,7 +1249,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new(
                                     "Paint every key one colour with 04 23. Enters user-lighting mode \
-                                     first, then writes 144 colour records.",
+                                     first, then writes 144 colour records — confirmed on hardware.",
                                 )
                                 .size(11.0)
                                 .color(TEXT_DIM),
@@ -1305,9 +1305,8 @@ impl App {
                             ui.add_space(8.0);
                             ui.label(
                                 egui::RichText::new(
-                                    "This path is documented from the binary and was replayed here, \
-                                     but it is not yet confirmed on hardware — the effect mode is \
-                                     still the safe default.",
+                                    "Verified on hardware: this turns every key the chosen colour. \
+                                     Apply a lighting mode afterwards to leave per-key mode.",
                                 )
                                 .size(10.0)
                                 .color(TEXT_FAINT),
