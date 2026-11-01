@@ -1127,6 +1127,15 @@ impl App {
                             .size(11.0)
                             .color(TEXT_DIM),
                     );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "firmware {}",
+                            hid::firmware_version().unwrap_or_else(|| "unknown".into())
+                        ))
+                        .monospace()
+                        .size(11.0)
+                        .color(TEXT_DIM),
+                    );
                 }
                 None => {
                     ui.label(egui::RichText::new("Not connected").size(13.0).color(BAD));

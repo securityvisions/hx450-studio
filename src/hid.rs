@@ -443,3 +443,23 @@ fn clock_sync(device: &Device, _events: &Sender<Event>) -> Result<(), String> {
     }
 }
 
+
+/// Firmware version, as the USB descriptor reports it.
+///
+/// The vendor app treats `bcdDevice` as the firmware version ("106" for 0x0106)
+/// and compares it against `<firmware version>` in its layout XML, so this is
+/// the authoritative number to show next to the device.
+pub fn firmware_version() -> Option<String> {
+    for entry in std::fs::read_dir("/sys/bus/usb/devices").ok()? {
+        let path = entry.ok()?.path();
+        let read = |name: &str| std::fs::read_to_string(path.join(name)).ok();
+        let vendor = read("idVendor")?.trim().to_string();
+        let product = read("idProduct")?.trim().to_string();
+        if vendor.eq_ignore_ascii_case("05ac") && product.eq_ignore_ascii_case("024f") {
+            let bcd = read("bcdDevice")?.trim().to_string();
+            let value = u32::from_str_radix(&bcd, 16).ok()?;
+            return Some(format!("{}.{:02}", value >> 8, value & 0xFF));
+        }
+    }
+    None
+}
