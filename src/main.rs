@@ -82,6 +82,7 @@ struct App {
     metrics: Option<live::Metrics>,
     metrics_at: Option<Instant>,
     log: Vec<(String, String, Tone)>,
+    push_failures: u32,
 }
 
 impl App {
@@ -118,6 +119,7 @@ impl App {
             metrics: None,
             metrics_at: None,
             log: Vec::new(),
+            push_failures: 0,
         };
         app.worker.send(Command::Probe);
         app.live_preview = app.live_state.render(app.live_provider);
@@ -134,6 +136,19 @@ impl App {
         self.tone = tone;
         self.log
             .insert(0, (chrono::Local::now().format("%H:%M:%S").to_string(), message, tone));
+        self.log.truncate(40);
+    }
+
+    /// Append a line to the activity log even when it repeats.
+    fn note(&mut self, message: &str, tone: Tone) {
+        self.log.insert(
+            0,
+            (
+                chrono::Local::now().format("%H:%M:%S").to_string(),
+                message.to_string(),
+                tone,
+            ),
+        );
         self.log.truncate(40);
     }
 
@@ -359,6 +374,27 @@ impl App {
                                 .size(11.0)
                                 .color(TEXT_DIM),
                         );
+                    }
+
+                    if self.live_running {
+                        ui.add_space(10.0);
+                        let stale = self
+                            .last_push
+                            .map(|at| at.elapsed().as_secs() > self.live_interval as u64 * 2)
+                            .unwrap_or(true);
+                        let (colour, text) = match self.last_push {
+                            Some(at) if !stale => (
+                                GOOD,
+                                format!("live · pushed {}s ago", at.elapsed().as_secs()),
+                            ),
+                            Some(at) => (
+                                WARN,
+                                format!("live · stale {}s", at.elapsed().as_secs()),
+                            ),
+                            None => (WARN, "live · waiting for first push".to_string()),
+                        };
+                        ui.label(egui::RichText::new("●").size(8.0).color(colour));
+                        ui.label(egui::RichText::new(text).size(11.0).color(colour));
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1044,9 +1080,10 @@ impl App {
                                         if let Some(temp) = metrics.temp {
                                             metric_row(ui, "temp", &format!("{temp:.0} C"));
                                         }
-                                        let context = metrics.context_tokens as f32
+                                        let context = (metrics.context_tokens as f32
                                             / 200_000.0
-                                            * 100.0;
+                                            * 100.0)
+                                            .min(100.0);
                                         metric_row(ui, "context", &format!("{context:.0} %"));
                                     });
                             }
@@ -1223,11 +1260,22 @@ impl App {
                     self.progress = None;
                     self.set_status(message, Tone::Bad);
                 }
-                Event::LiveFrame { at } => {
-                    self.last_push = Some(at);
+                Event::LivePush { ok, message } => {
                     self.live_preview = self.live_state.render(self.live_provider);
                     self.live_preview_at = Some(Instant::now());
-                    self.set_status("live frame pushed", Tone::Good);
+                    self.live_preview = self.live_preview.clone();
+                    if ok {
+                        self.last_push = Some(Instant::now());
+                        self.push_failures = 0;
+                        self.note(&format!("live: {message}"), Tone::Good);
+                        self.status = format!("live: {message}");
+                        self.tone = Tone::Good;
+                    } else {
+                        self.push_failures = self.push_failures.saturating_add(1);
+                        self.note(&message, Tone::Bad);
+                        self.status = message;
+                        self.tone = Tone::Bad;
+                    }
                 }
                 Event::LiveState { running } => {
                     self.live_running = running;

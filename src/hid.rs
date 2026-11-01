@@ -44,7 +44,7 @@ pub enum Event {
     Stage { label: String, done: usize, total: usize },
     Finished { message: String },
     Failed { message: String },
-    LiveFrame { at: Instant },
+    LivePush { ok: bool, message: String },
     LiveState { running: bool },
 }
 
@@ -77,6 +77,23 @@ struct LiveJob {
     provider: Provider,
     interval: Duration,
     next_at: Instant,
+    failures: u32,
+}
+
+/// The clock is aligned to the minute boundary so the panel flips exactly when
+/// the minute changes instead of lagging up to a full interval behind.
+const CLOCK_ALIGN_MS: u64 = 1200;
+
+fn next_due(provider: Provider, interval: Duration) -> Instant {
+    if provider == Provider::Clock {
+        let now = chrono::Local::now();
+        let seconds = now.second() as u64;
+        let millis = now.timestamp_subsec_millis() as u64;
+        let until_next_minute = (60 - seconds) * 1000 - millis + CLOCK_ALIGN_MS;
+        Instant::now() + Duration::from_millis(until_next_minute.max(1500))
+    } else {
+        Instant::now() + interval
+    }
 }
 
 fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<Event>) {
@@ -86,18 +103,32 @@ fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<Event>) {
     loop {
         if let Some(job) = live.as_mut() {
             if Instant::now() >= job.next_at {
-                job.next_at = Instant::now() + job.interval;
                 let provider = job.provider;
-                match with_device(|dev| {
+                let interval = job.interval;
+                let result = with_device(|dev| {
                     let frame = live_state.render(provider);
                     let payload = crate::model::Screen::single(frame).encode();
                     upload(dev, &payload, &evt_tx, true)
-                }) {
-                    Ok(_) => {
-                        let _ = evt_tx.send(Event::LiveFrame { at: Instant::now() });
+                });
+                match result {
+                    Ok(pages) => {
+                        job.failures = 0;
+                        job.next_at = next_due(provider, interval);
+                        let _ = evt_tx.send(Event::LivePush {
+                            ok: true,
+                            message: format!("{pages} pages pushed"),
+                        });
                     }
                     Err(message) => {
-                        let _ = evt_tx.send(Event::Failed { message });
+                        job.failures = job.failures.saturating_add(1);
+                        // Retry quickly at first, then back off so a sleeping
+                        // keyboard cannot spin the loop.
+                        let backoff = if job.failures >= 5 { 30 } else { 3 };
+                        job.next_at = Instant::now() + Duration::from_secs(backoff);
+                        let _ = evt_tx.send(Event::LivePush {
+                            ok: false,
+                            message: format!("push failed ({message}), retrying in {backoff}s"),
+                        });
                     }
                 }
             }
@@ -151,10 +182,12 @@ fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<Event>) {
                 }
             },
             Ok(Command::StartLive { provider, interval_secs }) => {
+                let interval = Duration::from_secs(interval_secs.max(10) as u64);
                 live = Some(LiveJob {
                     provider,
-                    interval: Duration::from_secs(interval_secs.max(10) as u64),
+                    interval,
                     next_at: Instant::now(),
+                    failures: 0,
                 });
                 let _ = evt_tx.send(Event::LiveState { running: true });
             }

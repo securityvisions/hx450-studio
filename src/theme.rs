@@ -24,6 +24,7 @@ pub const ACCENT: Color32 = Color32::from_rgb(0xf0, 0xa3, 0x3c);
 pub const ACCENT_SOFT: Color32 = Color32::from_rgb(0x4a, 0x35, 0x18);
 pub const CYAN: Color32 = Color32::from_rgb(0x53, 0xb8, 0xd8);
 pub const GOOD: Color32 = Color32::from_rgb(0x4c, 0xc3, 0x8a);
+pub const WARN: Color32 = Color32::from_rgb(0xf0, 0xa3, 0x3c);
 pub const BAD: Color32 = Color32::from_rgb(0xe5, 0x53, 0x4b);
 
 pub fn apply(ctx: &egui::Context) {
