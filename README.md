@@ -69,6 +69,13 @@ was found. Click the chip to rescan.
 3. **Live** — choose a provider, set the interval (30 s or more), press
    **Start**. **Push once** sends a single frame.
 
+   The clock provider ignores the interval for scheduling and aligns itself to
+   the **next minute boundary** (+1.2 s), so the panel flips within about a
+   second of the minute changing instead of lagging behind. A failed push
+   retries after 3 s (30 s after five failures), and the status bar shows a
+   green `live · pushed Ns ago` or an amber `stale` indicator, so a silent
+   stall is impossible to miss.
+
 Keyboard shortcuts: `1` `2` `3` `4` switch views, `U` uploads the timeline.
 
 ## How it talks to the keyboard
