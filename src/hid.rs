@@ -32,10 +32,26 @@ pub enum Command {
     Probe,
     Upload(Vec<u8>),
     Light { mode: u8, colour: (u8, u8, u8), brightness: u8, speed: u8, colourful: bool },
+    Settings(Settings),
+    PerKeyFill { colour: (u8, u8, u8), brightness: u8 },
     ClockSync,
     StartLive { provider: Provider, interval_secs: u32 },
     StopLive,
     Shutdown,
+}
+
+/// The `04 17` system-settings block recovered from the vendor binary.
+///
+/// Field offsets are verified in code; the value semantics (which index means
+/// which sleep mode, momentary vs toggle, debounce level) are inferred.
+#[derive(Debug, Clone, Copy)]
+pub struct Settings {
+    pub win_lock: bool,
+    pub alt_tab: bool,
+    pub alt_f4: bool,
+    pub fn_toggle: bool,
+    pub sleep: u8,
+    pub debounce: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +183,30 @@ fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<Event>) {
                 }) {
                     Ok(_) => {
                         let _ = evt_tx.send(Event::Finished { message: "lighting applied".into() });
+                    }
+                    Err(message) => {
+                        let _ = evt_tx.send(Event::Failed { message });
+                    }
+                }
+            }
+            Ok(Command::Settings(settings)) => {
+                match with_device(|dev| apply_settings(dev, settings, &evt_tx)) {
+                    Ok(_) => {
+                        let _ = evt_tx.send(Event::Finished {
+                            message: "settings applied".into(),
+                        });
+                    }
+                    Err(message) => {
+                        let _ = evt_tx.send(Event::Failed { message });
+                    }
+                }
+            }
+            Ok(Command::PerKeyFill { colour, brightness }) => {
+                match with_device(|dev| per_key_fill(dev, colour, brightness, &evt_tx)) {
+                    Ok(_) => {
+                        let _ = evt_tx.send(Event::Finished {
+                            message: "per-key colours written".into(),
+                        });
                     }
                     Err(message) => {
                         let _ = evt_tx.send(Event::Failed { message });
@@ -462,4 +502,105 @@ pub fn firmware_version() -> Option<String> {
         }
     }
     None
+}
+
+
+fn apply_settings(device: &Device, settings: Settings, events: &Sender<Event>) -> Result<(), String> {
+    for _ in 0..8 {
+        if read_reply(device).is_none() {
+            break;
+        }
+    }
+    command(device, &[0x04, 0x18])?;
+    // header: payload[2] = 1, payload[8] = 1
+    let mut header = [0u8; 64];
+    header[0] = 0x04;
+    header[1] = 0x17;
+    header[2] = 0x01;
+    header[8] = 0x01;
+    let status = command(device, &header)?;
+    if status != "ok" {
+        return Err(format!("settings header returned {status}"));
+    }
+
+    let mut block = [0u8; 64];
+    block[1] = 0x01;
+    block[2] = u8::from(settings.alt_tab);
+    block[3] = u8::from(settings.alt_f4);
+    block[4] = u8::from(settings.win_lock);
+    block[5] = u8::from(settings.fn_toggle);
+    block[6] = settings.sleep;
+    block[8] = settings.debounce;
+    block[62] = 0xAA;
+    block[63] = 0x55;
+    send_cmd(device, &block)?;
+    thread::sleep(CMD_DELAY);
+
+    let commit = command(device, &[0x04, 0x02])?;
+    let _ = events.send(Event::Stage { label: "settings".into(), done: 1, total: 1 });
+    if commit == "ok" {
+        Ok(())
+    } else {
+        Err(format!("settings commit returned {commit}"))
+    }
+}
+
+fn per_key_fill(
+    device: &Device,
+    colour: (u8, u8, u8),
+    brightness: u8,
+    events: &Sender<Event>,
+) -> Result<(), String> {
+    for _ in 0..8 {
+        if read_reply(device).is_none() {
+            break;
+        }
+    }
+    // Enter "user lighting" (per-key) mode: a light block with mode 0x80.
+    command(device, &[0x04, 0x18])?;
+    command(device, &[0x04, 0x13, 0, 0, 0, 0, 0, 0, 0x01])?;
+    let mut mode_block = [0u8; 64];
+    mode_block[0] = 0x80;
+    mode_block[9] = brightness.min(5);
+    mode_block[14] = 0xAA;
+    mode_block[15] = 0x55;
+    send_cmd(device, &mode_block)?;
+    thread::sleep(CMD_DELAY);
+    command(device, &[0x04, 0x02])?;
+    command(device, &[0x04, 0xF0])?;
+
+    // The app writes 144 records of [key_index, R, G, B].
+    let mut table = Vec::with_capacity(576);
+    for key in 0..144u8 {
+        table.extend_from_slice(&[key, colour.0, colour.1, colour.2]);
+    }
+
+    command(device, &[0x04, 0x18])?;
+    let mut header = [0u8; 64];
+    header[0] = 0x04;
+    header[1] = 0x23;
+    header[8] = 0x09;
+    let status = command(device, &header)?;
+    if status != "ok" {
+        return Err(format!("per-key header returned {status}"));
+    }
+
+    let chunks = table.len().div_ceil(64);
+    for (index, chunk) in table.chunks(64).enumerate() {
+        send_cmd(device, chunk)?;
+        thread::sleep(CMD_DELAY);
+        let _ = events.send(Event::Stage {
+            label: "per-key".into(),
+            done: index + 1,
+            total: chunks,
+        });
+    }
+
+    let commit = command(device, &[0x04, 0x02])?;
+    command(device, &[0x04, 0xF0])?;
+    if commit == "ok" {
+        Ok(())
+    } else {
+        Err(format!("per-key commit returned {commit}"))
+    }
 }

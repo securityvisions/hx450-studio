@@ -28,6 +28,7 @@ enum View {
     Screen,
     Lighting,
     Live,
+    Settings,
     Device,
 }
 
@@ -71,6 +72,14 @@ struct App {
     light_brightness: u8,
     light_speed: u8,
     light_colourful: bool,
+    per_key_colour: [u8; 3],
+    per_key_brightness: u8,
+    set_win_lock: bool,
+    set_alt_tab: bool,
+    set_alt_f4: bool,
+    set_fn_toggle: bool,
+    set_sleep: u8,
+    set_debounce: u8,
 
     live_provider: Provider,
     live_interval: u32,
@@ -109,6 +118,14 @@ impl App {
             light_brightness: 5,
             light_speed: 3,
             light_colourful: false,
+            per_key_colour: [0, 200, 255],
+            per_key_brightness: 5,
+            set_win_lock: false,
+            set_alt_tab: false,
+            set_alt_f4: false,
+            set_fn_toggle: false,
+            set_sleep: 0,
+            set_debounce: 3,
             live_provider: Provider::Clock,
             live_interval: 60,
             live_running: false,
@@ -245,6 +262,7 @@ impl App {
                         (View::Screen, "Screen"),
                         (View::Lighting, "Lighting"),
                         (View::Live, "Live"),
+                        (View::Settings, "Settings"),
                         (View::Device, "Device"),
                     ] {
                         let selected = self.view == view;
@@ -312,6 +330,7 @@ impl App {
                         (View::Screen, IconKind::Monitor),
                         (View::Lighting, IconKind::Bulb),
                         (View::Live, IconKind::Pulse),
+                        (View::Settings, IconKind::Sliders),
                         (View::Device, IconKind::Chip),
                     ] {
                         let selected = self.view == view;
@@ -420,6 +439,7 @@ impl App {
             View::Screen => self.screen_view(ui),
             View::Lighting => self.lighting_view(ui),
             View::Live => self.live_view(ui),
+            View::Settings => self.settings_view(ui),
             View::Device => self.device_view(ui),
         });
     }
@@ -1040,6 +1060,10 @@ impl App {
                                     self.set_status("live running", Tone::Good);
                                 }
                             }
+                            if ui.button("Sync clock").clicked() {
+                                self.worker.send(Command::ClockSync);
+                                self.set_status("syncing clock…", Tone::Info);
+                            }
                             if ui.button("Push once").clicked() {
                                 let payload =
                                     Screen::single(self.live_state.render(self.live_provider))
@@ -1098,6 +1122,203 @@ impl App {
         });
         ui.add_space(12.0);
         self.activity_card(ui);
+    }
+
+
+    // -- settings ----------------------------------------------------------
+    fn settings_view(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new((ui.available_width() * 0.55).max(360.0), ui.available_height()),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.label(egui::RichText::new("Settings").size(15.0).strong().color(TEXT));
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "The 04 17 system-settings block. Field offsets are verified in the \
+                             vendor binary; the value meanings below are inferred.",
+                        )
+                        .size(12.0)
+                        .color(TEXT_DIM),
+                    );
+                    ui.add_space(10.0);
+
+                    Frame::new()
+                        .fill(CARD)
+                        .stroke(Stroke::new(1.0_f32, BORDER))
+                        .corner_radius(CornerRadius::same(9))
+                        .inner_margin(Margin::same(14))
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width() - 8.0);
+                            ui.label(egui::RichText::new("KEY LOCKS").size(10.0).color(TEXT_FAINT));
+                            ui.add_space(8.0);
+                            ui.checkbox(&mut self.set_win_lock, "Disable the Windows key");
+                            ui.checkbox(&mut self.set_alt_f4, "Disable Alt + F4");
+                            ui.checkbox(&mut self.set_alt_tab, "Disable Alt + Tab");
+
+                            ui.add_space(12.0);
+                            ui.label(egui::RichText::new("BEHAVIOUR").size(10.0).color(TEXT_FAINT));
+                            ui.add_space(8.0);
+                            ui.checkbox(&mut self.set_fn_toggle, "Fn switch is a toggle (off = momentary)");
+
+                            ui.add_space(10.0);
+                            ui.label(egui::RichText::new("sleep when idle").size(11.0).color(TEXT_DIM));
+                            ui.horizontal(|ui| {
+                                for (value, label) in [(0u8, "off"), (1, "1 min"), (2, "5 min"), (3, "30 min")] {
+                                    let selected = self.set_sleep == value;
+                                    let text = egui::RichText::new(label)
+                                        .size(12.0)
+                                        .color(if selected { TEXT } else { TEXT_DIM });
+                                    let button = egui::Button::new(text)
+                                        .fill(if selected { ACTIVE } else { INPUT })
+                                        .stroke(Stroke::new(
+                                            1.0_f32,
+                                            if selected { ACCENT } else { BORDER },
+                                        ))
+                                        .corner_radius(CornerRadius::same(7));
+                                    if ui.add(button).clicked() {
+                                        self.set_sleep = value;
+                                    }
+                                }
+                            });
+
+                            ui.add_space(10.0);
+                            ui.label(
+                                egui::RichText::new(format!("key response (debounce level {})", self.set_debounce))
+                                    .size(11.0)
+                                    .color(TEXT_DIM),
+                            );
+                            slider_row(ui, "level", &mut self.set_debounce, 5);
+
+                            ui.add_space(14.0);
+                            if primary_button(ui, "Apply settings").clicked() {
+                                self.worker.send(Command::Settings(hid::Settings {
+                                    win_lock: self.set_win_lock,
+                                    alt_tab: self.set_alt_tab,
+                                    alt_f4: self.set_alt_f4,
+                                    fn_toggle: self.set_fn_toggle,
+                                    sleep: self.set_sleep,
+                                    debounce: self.set_debounce,
+                                }));
+                                self.set_status("applying settings…", Tone::Info);
+                            }
+                        });
+
+                    ui.add_space(12.0);
+                    Frame::new()
+                        .fill(CARD)
+                        .stroke(Stroke::new(1.0_f32, BORDER))
+                        .corner_radius(CornerRadius::same(9))
+                        .inner_margin(Margin::same(14))
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width() - 8.0);
+                            ui.label(egui::RichText::new("CLOCK").size(10.0).color(TEXT_FAINT));
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Push the host clock to the keyboard RTC (04 28). The panel shows \
+                                     whatever frame we upload, but the keyboard's own clock mode uses this.",
+                                )
+                                .size(11.0)
+                                .color(TEXT_DIM),
+                            );
+                            ui.add_space(8.0);
+                            if ui.button("Sync clock now").clicked() {
+                                self.worker.send(Command::ClockSync);
+                                self.set_status("syncing clock…", Tone::Info);
+                            }
+                        });
+                },
+            );
+
+            ui.add_space(14.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), ui.available_height()),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    Frame::new()
+                        .fill(CARD)
+                        .stroke(Stroke::new(1.0_f32, BORDER))
+                        .corner_radius(CornerRadius::same(9))
+                        .inner_margin(Margin::same(14))
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width() - 8.0);
+                            ui.label(egui::RichText::new("PER-KEY COLOURS").size(10.0).color(TEXT_FAINT));
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Paint every key one colour with 04 23. Enters user-lighting mode \
+                                     first, then writes 144 colour records.",
+                                )
+                                .size(11.0)
+                                .color(TEXT_DIM),
+                            );
+                            ui.add_space(10.0);
+                            let (swatch, _) = ui.allocate_exact_size(
+                                Vec2::new(ui.available_width(), 44.0),
+                                Sense::hover(),
+                            );
+                            ui.painter().rect_filled(
+                                swatch,
+                                CornerRadius::same(7),
+                                Color32::from_rgb(
+                                    self.per_key_colour[0],
+                                    self.per_key_colour[1],
+                                    self.per_key_colour[2],
+                                ),
+                            );
+                            ui.painter().rect_stroke(
+                                swatch,
+                                CornerRadius::same(7),
+                                Stroke::new(1.0_f32, BORDER_HI),
+                                StrokeKind::Inside,
+                            );
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.color_edit_button_srgb(&mut self.per_key_colour);
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "#{:02X}{:02X}{:02X}",
+                                        self.per_key_colour[0],
+                                        self.per_key_colour[1],
+                                        self.per_key_colour[2]
+                                    ))
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(TEXT_DIM),
+                                );
+                            });
+                            slider_row(ui, "brightness", &mut self.per_key_brightness, 5);
+                            ui.add_space(10.0);
+                            if ui.button("Fill every key").clicked() {
+                                self.worker.send(Command::PerKeyFill {
+                                    colour: (
+                                        self.per_key_colour[0],
+                                        self.per_key_colour[1],
+                                        self.per_key_colour[2],
+                                    ),
+                                    brightness: self.per_key_brightness,
+                                });
+                                self.set_status("writing per-key colours…", Tone::Info);
+                            }
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "This path is documented from the binary and was replayed here, \
+                                     but it is not yet confirmed on hardware — the effect mode is \
+                                     still the safe default.",
+                                )
+                                .size(10.0)
+                                .color(TEXT_FAINT),
+                            );
+                        });
+
+                    ui.add_space(12.0);
+                    self.activity_card(ui);
+                },
+            );
+        });
     }
 
     // -- device ------------------------------------------------------------
@@ -1231,7 +1452,8 @@ impl App {
                 (egui::Key::Num1, View::Screen),
                 (egui::Key::Num2, View::Lighting),
                 (egui::Key::Num3, View::Live),
-                (egui::Key::Num4, View::Device),
+                (egui::Key::Num4, View::Settings),
+                (egui::Key::Num5, View::Device),
             ] {
                 if input.key_pressed(key) && !input.modifiers.ctrl {
                     self.view = view;
@@ -1484,6 +1706,7 @@ enum IconKind {
     Monitor,
     Bulb,
     Pulse,
+    Sliders,
     Chip,
 }
 
@@ -1534,6 +1757,21 @@ fn draw_icon(painter: &egui::Painter, center: Pos2, kind: IconKind, colour: Colo
                 painter.line_segment([pair[0], pair[1]], stroke);
             }
         }
+        IconKind::Sliders => {
+            for (index, offset) in [-5.0f32, 0.0, 5.0].iter().enumerate() {
+                let y = center.y + offset;
+                painter.line_segment(
+                    [Pos2::new(center.x - 8.0, y), Pos2::new(center.x + 8.0, y)],
+                    stroke,
+                );
+                let knob = match index {
+                    0 => center.x + 3.0,
+                    1 => center.x - 4.0,
+                    _ => center.x + 1.0,
+                };
+                painter.circle_filled(Pos2::new(knob, y), 2.0, colour);
+            }
+        }
         IconKind::Chip => {
             let rect = Rect::from_center_size(center, Vec2::new(14.0, 14.0));
             painter.rect_stroke(rect, CornerRadius::same(2), stroke, StrokeKind::Middle);
@@ -1573,6 +1811,7 @@ fn main() -> eframe::Result<()> {
         .map(|name| match name.as_str() {
             "lighting" => View::Lighting,
             "live" => View::Live,
+            "settings" => View::Settings,
             "device" => View::Device,
             _ => View::Screen,
         })

@@ -31,7 +31,8 @@ protocol.
 | ![Screen view](docs/img/studio-screen.png) | **Screen** — paint on the panel with a brush/eraser/fill, import a PNG or an animated GIF, tune per-frame delays on the timeline, then upload. |
 | ![Lighting view](docs/img/studio-lighting.png) | **Lighting** — all twenty onboard effects, colour picker with presets, brightness and speed. |
 | ![Live view](docs/img/studio-live.png) | **Live** — clock, system load or Claude Code context usage, re-rendered and pushed on an interval. |
-| ![Device view](docs/img/studio-device.png) | **Device** — hidraw nodes, panel facts, clock sync, shortcuts. |
+| ![Settings view](docs/img/studio-settings.png) | **Settings** — the `04 17` block: key locks, Fn switch, sleep time, debounce, plus per-key colours (`04 23`) and a clock sync. |
+| ![Device view](docs/img/studio-device.png) | **Device** — hidraw nodes, firmware version, panel facts, shortcuts. |
 
 ## Features
 
@@ -89,7 +90,7 @@ was found. Click the chip to rescan.
    green `live · pushed Ns ago` or an amber `stale` indicator, so a silent
    stall is impossible to miss.
 
-Keyboard shortcuts: `1` `2` `3` `4` switch views, `U` uploads the timeline.
+Keyboard shortcuts: `1`–`5` switch views, `U` uploads the timeline.
 
 ## How it talks to the keyboard
 
