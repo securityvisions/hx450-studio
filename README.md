@@ -4,12 +4,25 @@ A desktop studio for the **HISKA HX-KEG450** keyboard's 160×96 LCD and its RGB
 lighting — written in Rust with [egui](https://github.com/emilk/egui), drawn on
 the GPU, shipped as a single binary. No Windows, no vendor tool, no VM.
 
+![license](https://img.shields.io/badge/license-MIT-blue)
+![rust](https://img.shields.io/badge/rust-1.88%2B-dea584?logo=rust&logoColor=black)
+![egui](https://img.shields.io/badge/egui-0.31-000?logo=rust)
+![platform](https://img.shields.io/badge/platform-Linux-333?logo=linux&logoColor=white)
+![hardware](https://img.shields.io/badge/hardware-HX--KEG450-4cc38a)
+
 ![HX450 Studio, screen view](docs/img/studio-screen.png)
 
 The keyboard speaks a private HID protocol that only the vendor's Windows app
-understood. That protocol was reverse-engineered and is documented in the
-companion repo, [`hiska-keg450-lcd`](https://github.com/securityvisions/hiska-keg450-lcd);
-this app is the friendly front end for it.
+understood. This app is the friendly front end for the reverse-engineered
+protocol.
+
+## The family
+
+| Repo | What it is |
+|---|---|
+| **hx450-studio** (here) | Rust + egui desktop studio |
+| [**hiska-keg450-lcd**](https://github.com/securityvisions/hiska-keg450-lcd) | Python CLI + protocol reference |
+| [**hx450-re**](https://github.com/securityvisions/hx450-re) | reverse-engineering kit — opcode atlas, firmware report, Ghidra evidence |
 
 ## Views
 
@@ -61,7 +74,7 @@ was found. Click the chip to rescan.
 
 ## Using it
 
-1. **Screen** — draw, or `Import image / GIF`. Use `+` / `−` on the timeline to
+1. **Screen** — draw, or **Import image / GIF**. Use `+` / `−` on the timeline to
    duplicate or delete frames, set the delay, then **Upload to keyboard**
    (a 225-frame animation takes about four minutes).
 2. **Lighting** — pick an effect, choose a colour, hit **Apply lighting**. Tick
